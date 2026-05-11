@@ -1,7 +1,29 @@
-# EmiJson — Internals
+# EmiJson — High Performance JSON Parser
+
+EmiJson es un parser y serializer JSON de ultra alto rendimiento para Java, diseñado para aprovechar las últimas características de la JVM y eliminar por completo el uso de *Reflection* clásico durante el procesamiento de datos.
+
+## 🚀 Requisitos del Sistema
+
+Para compilar y ejecutar este proyecto de forma exitosa, necesitas cumplir con los siguientes requisitos:
+
+- **Java 25** (Obligatorio para acceso nativo y óptimo a las APIs más recientes, incluyendo Vector API y FFM).
+- **Gradle 8.x** (El proyecto ya incluye el wrapper, por lo que puedes usar `./gradlew`).
+- **Módulos Incubadores Habilitados**: Dado que el proyecto utiliza la **Vector API** para acelerar el procesamiento mediante SIMD, es **obligatorio** incluir el flag `--add-modules jdk.incubator.vector` en la JVM al ejecutar o compilar (esto ya está configurado en el `build.gradle.kts`).
+
+## 🛠️ Cómo compilar y probar
+
+Puedes ejecutar la suite de pruebas automatizadas con el siguiente comando:
+
+```bash
+./gradlew test
+```
+*(Nota importante: Al ejecutar los tests, verás un mensaje rojo que dice `WARNING: Using incubator modules: jdk.incubator.vector`. **Esto no es un error**, es una advertencia obligatoria de la JVM al usar módulos experimentales. Los tests se ejecutarán con normalidad).*
+
+---
+
+## 🧠 Internals y Arquitectura
 
 Documento de referencia técnica: qué tecnologías usa EmiJson y por qué, y qué técnicas aplica en el camino caliente (parse / serialize).
-
 ---
 
 ## Tecnologías
