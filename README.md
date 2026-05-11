@@ -7,7 +7,7 @@ EmiJson es un parser y serializer JSON de ultra alto rendimiento para Java, dise
 Para compilar y ejecutar este proyecto de forma exitosa, necesitas cumplir con los siguientes requisitos:
 
 - **Java 25** (Obligatorio para acceso nativo y óptimo a las APIs más recientes, incluyendo Vector API y FFM).
-- **Gradle 8.x** (El proyecto ya incluye el wrapper, por lo que puedes usar `./gradlew`).
+- **Gradle 9.4 o superior** (El proyecto ya incluye el wrapper configurado en la versión 9.4.1, por lo que basta con usar `./gradlew`).
 - **Módulos Incubadores Habilitados**: Dado que el proyecto utiliza la **Vector API** para acelerar el procesamiento mediante SIMD, es **obligatorio** incluir el flag `--add-modules jdk.incubator.vector` en la JVM al ejecutar o compilar (esto ya está configurado en el `build.gradle.kts`).
 
 ## 🛠️ Cómo compilar y probar
