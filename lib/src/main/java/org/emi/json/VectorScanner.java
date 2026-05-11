@@ -26,9 +26,9 @@ final class VectorScanner {
     static long skipWhitespace(MemorySegment segment, long offset) {
         long i = offset;
         long size = segment.byteSize();
-        long limit = SPECIES.loopBound(size);
+        long limit = size - SPECIES.length();
 
-        for (; i < limit - SPECIES.length(); i += SPECIES.length()) {
+        for (; i <= limit; i += SPECIES.length()) {
             ByteVector v = ByteVector.fromMemorySegment(SPECIES, segment, i, ByteOrder.nativeOrder());
             // GT 32 identifica cualquier byte imprimible; firstTrue() devuelve la posición exacta.
             var mask = v.compare(VectorOperators.GT, (byte) 32);
@@ -49,11 +49,11 @@ final class VectorScanner {
     static long findDelimiter(MemorySegment segment, long offset, byte target) {
         long i = offset;
         long size = segment.byteSize();
-        long limit = SPECIES.loopBound(size);
+        long limit = size - SPECIES.length();
         // El vector de comparación se construye una sola vez fuera del loop.
         ByteVector vTarget = ByteVector.broadcast(SPECIES, target);
 
-        for (; i < limit - SPECIES.length(); i += SPECIES.length()) {
+        for (; i <= limit; i += SPECIES.length()) {
             ByteVector vInput = ByteVector.fromMemorySegment(SPECIES, segment, i, ByteOrder.nativeOrder());
             var mask = vInput.compare(VectorOperators.EQ, vTarget);
             if (mask.anyTrue()) return i + mask.firstTrue();

@@ -338,7 +338,15 @@ final class JsonParser<T> {
                     case 'f'  -> sb.append('\f');
                     case 'u'  -> {
                         if (j + 4 < raw.length()) {
-                            sb.append((char) Integer.parseInt(raw.substring(j + 1, j + 5), 16));
+                            int codePoint = 0;
+                            for (int k = 1; k <= 4; k++) {
+                                char hex = raw.charAt(j + k);
+                                int val = (hex >= '0' && hex <= '9') ? hex - '0' :
+                                          (hex >= 'a' && hex <= 'f') ? hex - 'a' + 10 :
+                                          (hex >= 'A' && hex <= 'F') ? hex - 'A' + 10 : 0;
+                                codePoint = (codePoint << 4) | val;
+                            }
+                            sb.append((char) codePoint);
                             j += 4;
                         }
                     }

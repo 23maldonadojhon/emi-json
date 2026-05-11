@@ -19,6 +19,13 @@ import java.util.List;
  */
 final class JsonSerializer<T> {
 
+    private static final String[] CTRL_ESCAPES = new String[32];
+    static {
+        for (int i = 0; i < 32; i++) {
+            CTRL_ESCAPES[i] = String.format("\\u%04x", i);
+        }
+    }
+
     private final RecordMetadata<T> meta;
 
     // Apuntan a compactKeys o prettyKeys de RecordMetadata según el modo elegido.
@@ -180,7 +187,7 @@ final class JsonSerializer<T> {
                 case '\b' -> sb.append("\\b");
                 case '\f' -> sb.append("\\f");
                 default   -> {
-                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    if (c < 0x20) sb.append(CTRL_ESCAPES[c]);
                     else sb.append(c);
                 }
             }
