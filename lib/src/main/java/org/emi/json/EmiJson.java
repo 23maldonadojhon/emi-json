@@ -109,10 +109,10 @@ public class EmiJson<T> {
     private EmiJson(Class<T> targetClass, boolean strict, boolean prettyPrint) {
         if (!targetClass.isRecord())
             throw new IllegalArgumentException("Target must be a Java Record");
-        // RecordMetadata se construye una sola vez y ambos colaboradores lo comparten.
-        var meta        = new RecordMetadata<>(targetClass);
+        // RecordMetadata se obtiene del caché global para evitar recalcular metadatos.
+        var meta        = RecordMetadata.of(targetClass);
         this.parser     = new JsonParser<>(meta, strict);
-        this.serializer = new JsonSerializer<>(meta, prettyPrint);
+        this.serializer = JsonSerializer.of(meta, prettyPrint);
     }
 
     /** Parsea un objeto JSON desde String. */

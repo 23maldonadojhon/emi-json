@@ -6,49 +6,37 @@ import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.BitSet;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+
+enum TypeKind {
+    INT, LONG, DOUBLE, FLOAT, BOOLEAN, STRING, 
+    BIG_DECIMAL, BIG_INTEGER, DATE, DATETIME, INSTANT,
+    ENUM, RECORD, LIST, ARRAY, OTHER
+}
 
 /**
- * Caché de metadatos de un Java Record: MethodHandles, nombres de componentes y
- * fragmentos de serialización pre-computados. Se construye una única vez por tipo
- * en el constructor de EmiJson y es compartida (sin estado mutable) entre
- * JsonParser y JsonSerializer, haciéndola thread-safe de forma inherente.
- *
- * <p>Todo el coste de reflexión se paga aquí en tiempo de inicialización;
- * el camino caliente (parse / toJson) no toca reflexión en absoluto.
+ * Caché de metadatos de un Java Record.
  */
 final class RecordMetadata<T> {
 
+    private static final ConcurrentHashMap<Class<?>, RecordMetadata<?>> CACHE = new ConcurrentHashMap<>();
+
+    @SuppressWarnings("unchecked")
+    static <T> RecordMetadata<T> of(Class<T> targetClass) {
+        return (RecordMetadata<T>) CACHE.computeIfAbsent(targetClass, RecordMetadata::new);
+    }
+
     final Class<T> targetClass;
-
-    // Handle del constructor canónico del Record (args en orden de declaración).
-    // invokeWithArguments evita boxing manual para primitivos al llamar al constructor.
     final MethodHandle constructorHandle;
-
     final List<RecordComponent> components;
-
-    // Handles de los accessors del Record (p. ej. record.name(), record.age()).
-    // Más rápidos que Method.invoke() gracias a la inlining del JIT sobre MethodHandle.
     final List<MethodHandle> accessorHandles;
-
-    // Nombres de componentes en bytes UTF-8: permite al parser comparar keys del JSON
-    // directamente contra el MemorySegment sin crear ningún String intermedio.
     final byte[][] componentNameBytes;
-
-    // Fragmentos de llave listos para hacer sb.append(): "\"name\":" y "  \"name\": "
-    // Se calculan una vez aquí para que el serializer solo encadene appends en el loop.
     final String[] compactKeys;
     final String[] prettyKeys;
-
-    // Tipo genérico de cada componente (e.g. List<String>, no solo List).
-    // getType() devuelve el tipo borrado; getGenericType() preserva los type arguments
-    // necesarios para saber el tipo de elemento al parsear un array JSON.
     final Type[] genericTypes;
-
-    // Capacidad inicial del StringBuilder usada en toJson/toBytes.
-    // Suma real de todas las llaves + separadores + estimación mínima de 8 bytes por valor.
-    // Evita el primer resize interno del StringBuilder en la mayoría de los casos.
+    final TypeKind[] componentTypeKinds;
+    final Object[] argsTemplate;
     final int compactMinCapacity;
 
     RecordMetadata(Class<T> targetClass) {
@@ -60,6 +48,8 @@ final class RecordMetadata<T> {
         this.compactKeys        = new String[n];
         this.prettyKeys         = new String[n];
         this.genericTypes       = new Type[n];
+        this.componentTypeKinds = new TypeKind[n];
+        
         int keysSize = 0;
         for (int i = 0; i < n; i++) {
             String name           = components.get(i).getName();
@@ -67,9 +57,9 @@ final class RecordMetadata<T> {
             compactKeys[i]        = "\"" + name + "\":";
             prettyKeys[i]         = "  \"" + name + "\": ";
             genericTypes[i]       = components.get(i).getGenericType();
+            componentTypeKinds[i] = resolveTypeKind(components.get(i).getType());
             keysSize             += compactKeys[i].length();
         }
-        // 2 = llaves {} | (n-1) = comas | n*8 = estimación mínima de valores
         this.compactMinCapacity = 2 + keysSize + (n - 1) + n * 8;
 
         try {
@@ -93,19 +83,12 @@ final class RecordMetadata<T> {
         } catch (Exception e) {
             throw new RuntimeException("Failed to initialize handles for " + targetClass.getName(), e);
         }
-    }
 
-    /**
-     * Crea un array de argumentos con los valores cero correspondientes a cada componente.
-     * Los tipos de referencia permanecen {@code null}; los primitivos necesitan su zero-value
-     * explícito porque invokeWithArguments lanzaría NullPointerException al hacer unboxing.
-     */
-    Object[] initArgs() {
-        Object[] args = new Object[components.size()];
-        for (int i = 0; i < components.size(); i++) {
+        this.argsTemplate = new Object[n];
+        for (int i = 0; i < n; i++) {
             Class<?> t = components.get(i).getType();
             if (!t.isPrimitive()) continue;
-            args[i] = switch (t.getSimpleName()) {
+            argsTemplate[i] = switch (t.getSimpleName()) {
                 case "int"     -> 0;
                 case "long"    -> 0L;
                 case "double"  -> 0.0;
@@ -117,19 +100,40 @@ final class RecordMetadata<T> {
                 default        -> null;
             };
         }
+    }
+
+    private TypeKind resolveTypeKind(Class<?> type) {
+        if (type == int.class     || type == Integer.class)    return TypeKind.INT;
+        if (type == long.class    || type == Long.class)       return TypeKind.LONG;
+        if (type == double.class  || type == Double.class)     return TypeKind.DOUBLE;
+        if (type == float.class   || type == Float.class)      return TypeKind.FLOAT;
+        if (type == boolean.class || type == Boolean.class)    return TypeKind.BOOLEAN;
+        if (type == String.class)                              return TypeKind.STRING;
+        if (type == java.math.BigDecimal.class)                return TypeKind.BIG_DECIMAL;
+        if (type == java.math.BigInteger.class)                return TypeKind.BIG_INTEGER;
+        if (type == java.time.LocalDate.class)                 return TypeKind.DATE;
+        if (type == java.time.LocalDateTime.class)             return TypeKind.DATETIME;
+        if (type == java.time.Instant.class)                   return TypeKind.INSTANT;
+        if (type.isEnum())                                     return TypeKind.ENUM;
+        if (type.isRecord())                                   return TypeKind.RECORD;
+        if (type == java.util.List.class)                      return TypeKind.LIST;
+        if (type.isArray())                                    return TypeKind.ARRAY;
+        return TypeKind.OTHER;
+    }
+
+    Object[] initArgs() {
+        int n = argsTemplate.length;
+        Object[] args = new Object[n];
+        for (int i = 0; i < n; i++) {
+            args[i] = argsTemplate[i];
+        }
         return args;
     }
 
-    /**
-     * Verifica que todos los componentes del Record hayan sido asignados durante el parsing.
-     * Solo se invoca cuando {@code strict = true}; en modo laxo los campos ausentes
-     * conservan su valor cero de {@link #initArgs()}.
-     */
-    void validateAllPresent(BitSet seen) {
-        for (int i = 0; i < components.size(); i++) {
-            if (!seen.get(i))
-                throw new RuntimeException(
-                        "Strict mode: missing required field \"" + components.get(i).getName() + "\"");
+    void validateAllPresent(long seen) {
+        for (int i = 0; i < components.size() && i < 64; i++) {
+            if ((seen & (1L << i)) == 0)
+                throw new RuntimeException("Strict mode: missing required field \"" + components.get(i).getName() + "\"");
         }
     }
 }

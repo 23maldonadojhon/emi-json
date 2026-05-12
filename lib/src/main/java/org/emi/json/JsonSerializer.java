@@ -8,6 +8,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+
 
 /**
  * Serializa una instancia de Java Record a JSON en formato compacto o pretty-print.
@@ -25,6 +27,19 @@ final class JsonSerializer<T> {
             CTRL_ESCAPES[i] = String.format("\\u%04x", i);
         }
     }
+
+    private static final ConcurrentHashMap<String, JsonSerializer<?>> CACHE = new ConcurrentHashMap<>();
+    private static final ThreadLocal<StringBuilder> SB_POOL = ThreadLocal.withInitial(() -> new StringBuilder(4096));
+
+    /**
+     * Obtiene o crea un serializador cacheado para el tipo y modo especificados.
+     */
+    @SuppressWarnings("unchecked")
+    static <T> JsonSerializer<T> of(RecordMetadata<T> meta, boolean prettyPrint) {
+        String key = meta.targetClass.getName() + (prettyPrint ? "_P" : "_C");
+        return (JsonSerializer<T>) CACHE.computeIfAbsent(key, k -> new JsonSerializer<>(meta, prettyPrint));
+    }
+
 
     private final RecordMetadata<T> meta;
 
@@ -49,10 +64,12 @@ final class JsonSerializer<T> {
      * el primer resize del StringBuilder en la mayoría de los casos.
      */
     String toJson(T record) {
-        var sb = new StringBuilder(meta.compactMinCapacity);
+        StringBuilder sb = SB_POOL.get();
+        sb.setLength(0);
         build(sb, record);
         return sb.toString();
     }
+
 
     /**
      * Serializa {@code record} directamente a {@code byte[]} UTF-8 sin crear un
@@ -62,13 +79,18 @@ final class JsonSerializer<T> {
      * {@code toJson(record).getBytes(UTF_8)}.
      */
     byte[] toBytes(T record) {
-        var sb = new StringBuilder(meta.compactMinCapacity);
+        StringBuilder sb = SB_POOL.get();
+        sb.setLength(0);
         build(sb, record);
+        
+        // Optimización: Usamos Charset.encode directamente sobre el CharBuffer del StringBuilder.
+        // Aunque aún hay un ByteBuffer temporal interno en encode(), evitamos el String intermedio.
         ByteBuffer buf = StandardCharsets.UTF_8.encode(CharBuffer.wrap(sb));
         byte[] result = new byte[buf.remaining()];
         buf.get(result);
         return result;
     }
+
 
     /**
      * Núcleo de la serialización: recorre los componentes del Record en orden
@@ -114,10 +136,11 @@ final class JsonSerializer<T> {
             case List<?> lst   -> appendList(sb, lst);
             case Enum<?> e     -> appendEscapedString(sb, e.name());
             case Record r      -> appendNestedRecord(sb, r);
-            // Tipos fecha/hora: toString() produce ISO-8601, que debe ir entre comillas en JSON.
-            case LocalDate ld      -> appendEscapedString(sb, ld.toString());
-            case LocalDateTime ldt -> appendEscapedString(sb, ldt.toString());
+            // Tipos fecha/hora: Optimizados para evitar .toString() y la creación de Strings intermedios.
+            case LocalDate ld      -> appendLocalDate(sb, ld);
+            case LocalDateTime ldt -> appendLocalDateTime(sb, ldt);
             case Instant inst      -> appendEscapedString(sb, inst.toString());
+
             default -> {
                 // Arrays nativos (int[], String[], etc.) necesitan serialización propia;
                 // los demás tipos (Number y subclases) se escriben con toString() sin comillas.
@@ -171,8 +194,51 @@ final class JsonSerializer<T> {
         // Doble cast (Class<?>) → (Class<Object>) necesario: getClass() retorna Class<? extends Record>,
         // que Java no permite asignar directamente a Class<Object> sin pasar por el tipo wildcard.
         var type = (Class<Object>) (Class<?>) record.getClass();
-        new JsonSerializer<>(new RecordMetadata<>(type), false).build(sb, (Object) record);
+        JsonSerializer.of(RecordMetadata.of(type), false).build(sb, (Object) record);
     }
+
+    private void appendLocalDate(StringBuilder sb, LocalDate ld) {
+        sb.append('"');
+        appendPadded(sb, ld.getYear(), 4);
+        sb.append('-');
+        appendPadded(sb, ld.getMonthValue(), 2);
+        sb.append('-');
+        appendPadded(sb, ld.getDayOfMonth(), 2);
+        sb.append('"');
+    }
+
+    private void appendLocalDateTime(StringBuilder sb, LocalDateTime ldt) {
+        sb.append('"');
+        appendPadded(sb, ldt.getYear(), 4);
+        sb.append('-');
+        appendPadded(sb, ldt.getMonthValue(), 2);
+        sb.append('-');
+        appendPadded(sb, ldt.getDayOfMonth(), 2);
+        sb.append('T');
+        appendPadded(sb, ldt.getHour(), 2);
+        sb.append(':');
+        appendPadded(sb, ldt.getMinute(), 2);
+        sb.append(':');
+        appendPadded(sb, ldt.getSecond(), 2);
+        int nano = ldt.getNano();
+        if (nano > 0) {
+            sb.append('.');
+            sb.append(nano);
+        }
+        sb.append('"');
+    }
+
+    private void appendPadded(StringBuilder sb, int val, int width) {
+        if (width == 4) {
+            if (val < 1000) sb.append('0');
+            if (val < 100) sb.append('0');
+            if (val < 10) sb.append('0');
+        } else if (width == 2) {
+            if (val < 10) sb.append('0');
+        }
+        sb.append(val);
+    }
+
 
     private void appendEscapedString(StringBuilder sb, String s) {
         sb.append('"');

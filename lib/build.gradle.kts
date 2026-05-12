@@ -11,7 +11,7 @@ version = "0.1.0"
 
 plugins {
     `java-library`
-    id("me.champeau.jmh") version "0.7.2"
+    id("me.champeau.jmh") version "0.7.3"
 }
 
 repositories {
@@ -54,6 +54,7 @@ jmh {
     //benchmarkMode.set(listOf("thrpt"))
     benchmarkMode.set(listOf("avgt"))
     resultFormat.set("TEXT")
+    //profilers.set(listOf("jfr"))
     
     // ESTO ES LO QUE FALTA PARA EL VECTOR API EN EL BENCHMARK
     jvmArgs.set(listOf("--add-modules", "jdk.incubator.vector"))

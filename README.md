@@ -19,6 +19,13 @@ Puedes ejecutar la suite de pruebas automatizadas con el siguiente comando:
 ```
 *(Nota importante: Al ejecutar los tests, verás un mensaje rojo que dice `WARNING: Using incubator modules: jdk.incubator.vector`. **Esto no es un error**, es una advertencia obligatoria de la JVM al usar módulos experimentales. Los tests se ejecutarán con normalidad).*
 
+Para ejecutar los tests de rendimiento avanzado (JMH Benchmarks), utiliza el siguiente comando:
+
+```bash
+./gradlew jmh
+```
+*(Los benchmarks tomarán algunos minutos ya que realizarán varias iteraciones de calentamiento antes de imprimir los promedios de rendimiento en micro/nanosegundos).*
+
 ---
 
 ## 🧠 Internals y Arquitectura

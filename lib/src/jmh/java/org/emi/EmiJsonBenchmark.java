@@ -32,13 +32,13 @@ public class EmiJsonBenchmark {
             String description) {
     }
 
-    private List<String> lines;
+    private List<java.lang.foreign.MemorySegment> segments;
     private EmiJson<EmiFrameworkSimple> parser;
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
         parser = EmiJson.of(EmiFrameworkSimple.class).build();
-        lines = new ArrayList<>();
+        segments = new ArrayList<>();
 
         String resourceName = "/emi_simple_linear.json"; // Nota el '/' inicial
 
@@ -52,12 +52,13 @@ public class EmiJsonBenchmark {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (!line.trim().isEmpty()) {
-                        lines.add(line);
+                        byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
+                        segments.add(java.lang.foreign.MemorySegment.ofArray(bytes));
                     }
                 }
             }
         }
-        System.out.println("Líneas cargadas para el benchmark: " + lines.size());
+        System.out.println("Segmentos cargados para el benchmark: " + segments.size());
     }
 
     // Índice por hilo para rotar entre líneas sin contención
@@ -70,7 +71,12 @@ public class EmiJsonBenchmark {
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.NANOSECONDS)
     public EmiFrameworkSimple parseSingleRecord(LineIndex state) {
-        String line = lines.get(state.idx++ % lines.size());
-        return parser.parse(line);   // retorno obligatorio: evita dead-code elimination
+        int index = state.idx++;
+        if (index >= segments.size()) {
+            index = 0;
+            state.idx = 1;
+        }
+        java.lang.foreign.MemorySegment segment = segments.get(index);
+        return parser.parse(segment);   // retorno obligatorio: evita dead-code elimination
     }
 }
