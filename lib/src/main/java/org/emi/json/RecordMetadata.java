@@ -28,7 +28,7 @@ final class RecordMetadata<T> {
     }
 
     final Class<T> targetClass;
-    final MethodHandle constructorHandle;
+    final RecordInstantiator<T> instantiator;
     final List<RecordComponent> components;
     final List<MethodHandle> accessorHandles;
     final byte[][] componentNameBytes;
@@ -38,10 +38,13 @@ final class RecordMetadata<T> {
     final TypeKind[] componentTypeKinds;
     final Object[] argsTemplate;
     final int compactMinCapacity;
+    final int[] lookupTable;
+    final int lookupMask;
 
     RecordMetadata(Class<T> targetClass) {
         this.targetClass = targetClass;
         this.components = Arrays.asList(targetClass.getRecordComponents());
+        this.instantiator = ParserGenerator.generateInstantiator(targetClass);
 
         int n = components.size();
         this.componentNameBytes = new byte[n][];
@@ -62,12 +65,27 @@ final class RecordMetadata<T> {
         }
         this.compactMinCapacity = 2 + keysSize + (n - 1) + n * 8;
 
+        // --- Optimización: Tabla de búsqueda de llaves (O(1)) ---
+        int tableSize = 1;
+        while (tableSize < n * 2) tableSize <<= 1;
+        this.lookupMask = tableSize - 1;
+        this.lookupTable = new int[tableSize];
+        Arrays.fill(lookupTable, -1);
+
+        for (int i = 0; i < n; i++) {
+            byte[] bytes = componentNameBytes[i];
+            int h = hash(bytes, 0, bytes.length);
+            int pos = h & lookupMask;
+            // Manejo simple de colisiones (lineal) si fuera necesario, 
+            // pero para records pequeños suele ser directo.
+            while (lookupTable[pos] != -1) pos = (pos + 1) & lookupMask;
+            lookupTable[pos] = i;
+        }
+
         try {
             var lookup     = MethodHandles.lookup();
-            var paramTypes = components.stream().map(RecordComponent::getType).toArray(Class<?>[]::new);
-            var constructor = targetClass.getDeclaredConstructor(paramTypes);
-            constructor.setAccessible(true);
-            this.constructorHandle = lookup.unreflectConstructor(constructor);
+            // Eliminamos la búsqueda manual del constructor, delegamos a ParserGenerator
+            // que es más rápido y genera bytecode nativo.
 
             this.accessorHandles = components.stream()
                     .map(c -> {
@@ -76,12 +94,14 @@ final class RecordMetadata<T> {
                             accessor.setAccessible(true);
                             return lookup.unreflect(accessor);
                         } catch (IllegalAccessException e) {
-                            throw new RuntimeException("Cannot access accessor for: " + c.getName(), e);
+                            throw new JsonMappingException("Cannot access accessor for: " + c.getName(), e);
                         }
                     })
                     .toList();
+        } catch (EmiJsonException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to initialize handles for " + targetClass.getName(), e);
+            throw new JsonMappingException("Failed to initialize handles for " + targetClass.getName(), e);
         }
 
         this.argsTemplate = new Object[n];
@@ -133,7 +153,23 @@ final class RecordMetadata<T> {
     void validateAllPresent(long seen) {
         for (int i = 0; i < components.size() && i < 64; i++) {
             if ((seen & (1L << i)) == 0)
-                throw new RuntimeException("Strict mode: missing required field \"" + components.get(i).getName() + "\"");
+                throw new JsonMappingException("Strict mode: missing required field \"" + components.get(i).getName() + "\"");
         }
+    }
+
+    static int hash(byte[] bytes, int offset, int len) {
+        if (len == 0) return 0;
+        int h = len;
+        h = h * 31 + bytes[offset];
+        h = h * 31 + bytes[offset + len - 1];
+        return h;
+    }
+
+    static int hash(java.lang.foreign.MemorySegment segment, long start, long len) {
+        if (len == 0) return 0;
+        int h = (int) len;
+        h = h * 31 + segment.get(java.lang.foreign.ValueLayout.JAVA_BYTE, start);
+        h = h * 31 + segment.get(java.lang.foreign.ValueLayout.JAVA_BYTE, start + len - 1);
+        return h;
     }
 }

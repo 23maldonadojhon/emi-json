@@ -41,21 +41,12 @@ final class JsonSerializer<T> {
     }
 
 
+    private final RecordSerializer serializer;
     private final RecordMetadata<T> meta;
 
-    // Apuntan a compactKeys o prettyKeys de RecordMetadata según el modo elegido.
-    // Asignar aquí evita la bifurcación if(prettyPrint) dentro del loop caliente.
-    private final String[] keys;
-    private final String   sep;    // "," o ",\n"
-    private final String   open;   // "{" o "{\n"
-    private final String   close;  // "}" o "\n}"
-
     JsonSerializer(RecordMetadata<T> meta, boolean prettyPrint) {
-        this.meta  = meta;
-        this.keys  = prettyPrint ? meta.prettyKeys : meta.compactKeys;
-        this.sep   = prettyPrint ? ",\n"           : ",";
-        this.open  = prettyPrint ? "{\n"           : "{";
-        this.close = prettyPrint ? "\n}"           : "}";
+        this.meta = meta;
+        this.serializer = SerializerGenerator.generateSerializer(meta.targetClass, prettyPrint);
     }
 
     /**
@@ -97,28 +88,9 @@ final class JsonSerializer<T> {
      * de declaración, añadiendo la key pre-computada y el valor de cada campo.
      */
     void build(StringBuilder sb, T record) {
-        int n = keys.length;
-        sb.append(open);
-        for (int i = 0; i < n; i++) {
-            if (i > 0) sb.append(sep);
-            sb.append(keys[i]);                        // "\"name\":" ya preparado
-            appendJsonValue(sb, invokeAccessor(i, record));
-        }
-        sb.append(close);
+        serializer.serialize(sb, record);
     }
 
-    /**
-     * Invoca el accessor del Record para el campo {@code index} vía MethodHandle.
-     * El MethodHandle fue obtenido con unreflect() en RecordMetadata, por lo que el JIT
-     * puede inlinearlo igual que una llamada directa al método.
-     */
-    private Object invokeAccessor(int index, T record) {
-        try {
-            return meta.accessorHandles.get(index).invoke(record);
-        } catch (Throwable t) {
-            throw new RuntimeException("Serialization failed at: " + meta.components.get(index).getName(), t);
-        }
-    }
 
     /**
      * Escribe el valor JSON correcto según el tipo:
@@ -127,7 +99,7 @@ final class JsonSerializer<T> {
      * - null se escribe literalmente como "null".
      * El patrón switch sobre el tipo en runtime es más legible y seguro que instanceof encadenado.
      */
-    private void appendJsonValue(StringBuilder sb, Object value) {
+    public static void staticAppendValue(StringBuilder sb, Object value) {
         switch (value) {
             case null          -> sb.append("null");
             case String s      -> appendEscapedString(sb, s);
@@ -136,14 +108,11 @@ final class JsonSerializer<T> {
             case List<?> lst   -> appendList(sb, lst);
             case Enum<?> e     -> appendEscapedString(sb, e.name());
             case Record r      -> appendNestedRecord(sb, r);
-            // Tipos fecha/hora: Optimizados para evitar .toString() y la creación de Strings intermedios.
             case LocalDate ld      -> appendLocalDate(sb, ld);
             case LocalDateTime ldt -> appendLocalDateTime(sb, ldt);
             case Instant inst      -> appendEscapedString(sb, inst.toString());
 
             default -> {
-                // Arrays nativos (int[], String[], etc.) necesitan serialización propia;
-                // los demás tipos (Number y subclases) se escriben con toString() sin comillas.
                 if (value.getClass().isArray()) appendNativeArray(sb, value);
                 else sb.append(value);
             }
@@ -155,11 +124,11 @@ final class JsonSerializer<T> {
      * Cada elemento se delega recursivamente a {@link #appendJsonValue} para
      * manejar correctamente strings, booleanos, números y listas anidadas.
      */
-    private void appendList(StringBuilder sb, List<?> list) {
+    private static void appendList(StringBuilder sb, List<?> list) {
         sb.append('[');
         for (int i = 0; i < list.size(); i++) {
             if (i > 0) sb.append(',');
-            appendJsonValue(sb, list.get(i));
+            staticAppendValue(sb, list.get(i));
         }
         sb.append(']');
     }
@@ -174,12 +143,12 @@ final class JsonSerializer<T> {
      * Array.get autoboxea primitivos, por lo que cada elemento pasa por appendJsonValue
      * y recibe el tratamiento correcto (String con comillas, número sin ellas, etc.).
      */
-    private void appendNativeArray(StringBuilder sb, Object arr) {
+    private static void appendNativeArray(StringBuilder sb, Object arr) {
         sb.append('[');
         int len = Array.getLength(arr);
         for (int i = 0; i < len; i++) {
             if (i > 0) sb.append(',');
-            appendJsonValue(sb, Array.get(arr, i));
+            staticAppendValue(sb, Array.get(arr, i));
         }
         sb.append(']');
     }
@@ -190,14 +159,12 @@ final class JsonSerializer<T> {
      * padre sin crear un String intermedio.
      */
     @SuppressWarnings("unchecked")
-    private void appendNestedRecord(StringBuilder sb, Record record) {
-        // Doble cast (Class<?>) → (Class<Object>) necesario: getClass() retorna Class<? extends Record>,
-        // que Java no permite asignar directamente a Class<Object> sin pasar por el tipo wildcard.
+    private static void appendNestedRecord(StringBuilder sb, Record record) {
         var type = (Class<Object>) (Class<?>) record.getClass();
         JsonSerializer.of(RecordMetadata.of(type), false).build(sb, (Object) record);
     }
 
-    private void appendLocalDate(StringBuilder sb, LocalDate ld) {
+    private static void appendLocalDate(StringBuilder sb, LocalDate ld) {
         sb.append('"');
         appendPadded(sb, ld.getYear(), 4);
         sb.append('-');
@@ -207,7 +174,7 @@ final class JsonSerializer<T> {
         sb.append('"');
     }
 
-    private void appendLocalDateTime(StringBuilder sb, LocalDateTime ldt) {
+    private static void appendLocalDateTime(StringBuilder sb, LocalDateTime ldt) {
         sb.append('"');
         appendPadded(sb, ldt.getYear(), 4);
         sb.append('-');
@@ -228,7 +195,7 @@ final class JsonSerializer<T> {
         sb.append('"');
     }
 
-    private void appendPadded(StringBuilder sb, int val, int width) {
+    private static void appendPadded(StringBuilder sb, int val, int width) {
         if (width == 4) {
             if (val < 1000) sb.append('0');
             if (val < 100) sb.append('0');
@@ -240,7 +207,7 @@ final class JsonSerializer<T> {
     }
 
 
-    private void appendEscapedString(StringBuilder sb, String s) {
+    private static void appendEscapedString(StringBuilder sb, String s) {
         sb.append('"');
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);

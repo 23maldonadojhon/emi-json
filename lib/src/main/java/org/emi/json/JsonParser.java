@@ -47,7 +47,7 @@ final class JsonParser<T> {
 
         try {
             if (segment.get(ValueLayout.JAVA_BYTE, pos) != '{')
-                throw new RuntimeException("Invalid JSON");
+                throw new JsonParseException("Expected '{' to start JSON object", pos);
 
             while (pos < size) {
                 pos = VectorScanner.findDelimiter(segment, pos, (byte) '"');
@@ -81,9 +81,10 @@ final class JsonParser<T> {
                     long arrEnd = findArrayEnd(segment, pos, size);
                     if (idx >= 0) {
                         String raw = extractString(segment, pos, arrEnd + 1);
-                        TypeKind kind = meta.components.get(idx).getType().isRecord() ? TypeKind.RECORD : meta.componentTypeKinds[idx];
-                        List<Object> list = parseArrayValue(raw, meta.genericTypes[idx]);
-                        args[idx] = (meta.components.get(idx).getType().isArray()) ? toNativeArray(list, meta.components.get(idx).getType().getComponentType()) : list;
+                        Class<?> fieldType = meta.components.get(idx).getType();
+                        Type itemType = fieldType.isArray() ? fieldType.getComponentType() : meta.genericTypes[idx];
+                        List<Object> list = parseArrayValue(raw, itemType);
+                        args[idx] = (fieldType.isArray()) ? toNativeArray(list, fieldType.getComponentType()) : list;
                         seen |= (1L << idx);
                     }
                     pos = arrEnd;
@@ -104,30 +105,38 @@ final class JsonParser<T> {
                 }
                 pos++;
             }
+        } catch (EmiJsonException e) {
+            throw e;
         } catch (Throwable t) {
-            throw new RuntimeException(t);
+            throw new JsonParseException("Unexpected error during parsing: " + t.getMessage(), t);
         }
 
         if (strict) meta.validateAllPresent(seen);
-        try {
-            return meta.targetClass.cast(meta.constructorHandle.invokeWithArguments(args));
-        } catch (Throwable t) {
-            throw new RuntimeException(t);
-        }
+        return meta.instantiator.instantiate(args);
     }
 
     private int findComponentIndex(MemorySegment segment, long start, long end) {
-        int len = (int) (end - start);
-        byte[][] names = meta.componentNameBytes;
-        outer:
-        for (int i = 0; i < names.length; i++) {
-            if (names[i].length != len) continue;
-            for (int j = 0; j < len; j++) {
-                if (segment.get(ValueLayout.JAVA_BYTE, start + j) != names[i][j]) continue outer;
+        long len = end - start;
+        int h = RecordMetadata.hash(segment, start, len);
+        int pos = h & meta.lookupMask;
+        
+        while (true) {
+            int idx = meta.lookupTable[pos];
+            if (idx == -1) return -1;
+            
+            byte[] name = meta.componentNameBytes[idx];
+            if (name.length == len) {
+                boolean match = true;
+                for (int i = 0; i < len; i++) {
+                    if (segment.get(ValueLayout.JAVA_BYTE, start + i) != name[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return idx;
             }
-            return i;
+            pos = (pos + 1) & meta.lookupMask;
         }
-        return -1;
     }
 
     private String extractString(MemorySegment segment, long start, long end) {
@@ -148,7 +157,9 @@ final class JsonParser<T> {
         int res = 0;
         boolean neg = segment.get(ValueLayout.JAVA_BYTE, start) == '-';
         for (long i = neg ? start + 1 : start; i < end; i++) {
-            res = res * 10 + (segment.get(ValueLayout.JAVA_BYTE, i) - '0');
+            byte b = segment.get(ValueLayout.JAVA_BYTE, i);
+            if (b < '0' || b > '9') return new java.math.BigDecimal(extractString(segment, start, end)).intValue();
+            res = res * 10 + (b - '0');
         }
         return neg ? -res : res;
     }
@@ -157,7 +168,9 @@ final class JsonParser<T> {
         long res = 0;
         boolean neg = segment.get(ValueLayout.JAVA_BYTE, start) == '-';
         for (long i = neg ? start + 1 : start; i < end; i++) {
-            res = res * 10 + (segment.get(ValueLayout.JAVA_BYTE, i) - '0');
+            byte b = segment.get(ValueLayout.JAVA_BYTE, i);
+            if (b < '0' || b > '9') return new java.math.BigDecimal(extractString(segment, start, end)).longValue();
+            res = res * 10 + (b - '0');
         }
         return neg ? -res : res;
     }
@@ -204,10 +217,23 @@ final class JsonParser<T> {
     private Object convertType(String val, Class<?> type) {
         if (val == null || val.equals("null")) return null;
         if (type == String.class) return val;
-        if (type == int.class || type == Integer.class) return Integer.parseInt(val);
-        if (type == long.class || type == Long.class) return Long.parseLong(val);
+        if (type == int.class || type == Integer.class) {
+            return new java.math.BigDecimal(val).intValue();
+        }
+        if (type == long.class || type == Long.class) {
+            return new java.math.BigDecimal(val).longValue();
+        }
         if (type == double.class || type == Double.class) return Double.parseDouble(val);
+        if (type == float.class || type == Float.class) return Float.parseFloat(val);
         if (type == boolean.class || type == Boolean.class) return Boolean.parseBoolean(val);
+        if (type == short.class || type == Short.class) return Short.parseShort(val);
+        if (type == byte.class || type == Byte.class) return Byte.parseByte(val);
+        if (type == char.class || type == Character.class) return val.isEmpty() ? '\0' : val.charAt(0);
+        if (type == java.math.BigDecimal.class) return new java.math.BigDecimal(val);
+        if (type == java.math.BigInteger.class) return new java.math.BigInteger(val);
+        if (type == java.time.LocalDate.class) return java.time.LocalDate.parse(val);
+        if (type == java.time.LocalDateTime.class) return java.time.LocalDateTime.parse(val);
+        if (type == java.time.Instant.class) return java.time.Instant.parse(val);
         if (type.isEnum()) return Enum.valueOf((Class<Enum>) type, val);
         return val;
     }
@@ -217,26 +243,75 @@ final class JsonParser<T> {
         return new JsonParser<>(RecordMetadata.of(nestedType), false).parse(raw);
     }
 
-    private List<Object> parseArrayValue(String raw, Type genericType) {
+    private List<Object> parseArrayValue(String raw, Type genericOrComponentType) {
         List<Object> list = new ArrayList<>();
         String content = raw.substring(1, raw.length() - 1).trim();
         if (content.isEmpty()) return list;
-        Type itemType = (genericType instanceof ParameterizedType pt) ? pt.getActualTypeArguments()[0] : Object.class;
+        
+        Class<?> itemClass = Object.class;
+        if (genericOrComponentType instanceof Class<?> cls) {
+            itemClass = cls;
+        } else if (genericOrComponentType instanceof ParameterizedType pt) {
+            Type first = pt.getActualTypeArguments()[0];
+            if (first instanceof Class<?> c) itemClass = c;
+        }
+        
         for (String part : content.split(",")) {
             String p = part.trim();
             if (p.startsWith("\"")) p = p.substring(1, p.length() - 1);
-            list.add(convertType(p, (Class<?>) (itemType instanceof Class ? itemType : Object.class)));
+            list.add(convertType(p, itemClass));
         }
         return list;
     }
 
     private Object toNativeArray(List<Object> list, Class<?> componentType) {
         Object arr = Array.newInstance(componentType, list.size());
-        for (int i = 0; i < list.size(); i++) Array.set(arr, i, list.get(i));
+        for (int i = 0; i < list.size(); i++) {
+            Object val = list.get(i);
+            if (val == null) continue;
+            if (componentType.isPrimitive()) {
+                if (componentType == int.class) Array.setInt(arr, i, ((Number)val).intValue());
+                else if (componentType == long.class) Array.setLong(arr, i, ((Number)val).longValue());
+                else if (componentType == double.class) Array.setDouble(arr, i, ((Number)val).doubleValue());
+                else if (componentType == float.class) Array.setFloat(arr, i, ((Number)val).floatValue());
+                else if (componentType == boolean.class) Array.setBoolean(arr, i, (Boolean)val);
+                else if (componentType == short.class) Array.setShort(arr, i, ((Number)val).shortValue());
+                else if (componentType == byte.class) Array.setByte(arr, i, ((Number)val).byteValue());
+                else if (componentType == char.class) Array.setChar(arr, i, (Character)val);
+            } else {
+                Array.set(arr, i, val);
+            }
+        }
         return arr;
     }
 
     private String unescape(String s) {
-        return s.replace("\\\"", "\"").replace("\\\\", "\\").replace("\\n", "\n").replace("\\t", "\t");
+        if (s.indexOf('\\') == -1) return s;
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) {
+                char next = s.charAt(++i);
+                switch (next) {
+                    case '"'  -> sb.append('"');
+                    case '\\' -> sb.append('\\');
+                    case '/'  -> sb.append('/');
+                    case 'b'  -> sb.append('\b');
+                    case 'f'  -> sb.append('\f');
+                    case 'n'  -> sb.append('\n');
+                    case 'r'  -> sb.append('\r');
+                    case 't'  -> sb.append('\t');
+                    case 'u'  -> {
+                        if (i + 4 < s.length()) {
+                            String hex = s.substring(i + 1, i + 5);
+                            sb.append((char) Integer.parseInt(hex, 16));
+                            i += 4;
+                        } else sb.append("\\u");
+                    }
+                    default -> sb.append('\\').append(next);
+                }
+            } else sb.append(c);
+        }
+        return sb.toString();
     }
 }
