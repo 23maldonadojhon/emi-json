@@ -16,7 +16,17 @@ enum TypeKind {
 }
 
 /**
- * Caché de metadatos de un Java Record.
+ * Contenedor de metadatos de un Record optimizados para acceso de ultra-alta velocidad.
+ * Mantiene la estructura del Record, tipos genéricos y una tabla de búsqueda perfecta (O(1))
+ * para resolver nombres de campos desde bytes JSON sin crear Strings intermedios.
+ * 
+ * <p>Ejemplo de uso interno:</p>
+ * <pre>{@code
+ * RecordMetadata<User> meta = RecordMetadata.of(User.class);
+ * int fieldIndex = meta.findComponentIndex(segment, start, len);
+ * }</pre>
+ *
+ * @param <T> Tipo del Record.
  */
 final class RecordMetadata<T> {
 

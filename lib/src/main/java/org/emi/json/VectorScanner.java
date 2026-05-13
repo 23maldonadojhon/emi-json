@@ -8,6 +8,11 @@ import jdk.incubator.vector.*;
 /**
  * Utilidad de escaneo de bytes con aceleración SIMD via Vector API.
  * Optimización: Vectores de delimitadores pre-calculados para eliminar overhead de broadcast.
+ * 
+ * <p>Ejemplo de uso interno:</p>
+ * <pre>{@code
+ * long pos = VectorScanner.findDelimiter(segment, currentPos, (byte)'"');
+ * }</pre>
  */
 final class VectorScanner {
 

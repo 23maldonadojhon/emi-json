@@ -1,16 +1,21 @@
 package org.emi.json;
 
 /**
- * Interfaz funcional para la instanciación de Records de forma optimizada.
- * El código generado por Class-File API implementará esta interfaz para
- * evitar el uso de MethodHandles genéricos y boxing en el hot path.
+ * Interfaz funcional para la instanciación optimizada de Records.
+ * Implementada dinámicamente vía bytecode para evitar reflexión.
+ * 
+ * <p>Ejemplo:</p>
+ * <pre>{@code
+ * Object[] args = { "Emi", 25 };
+ * User u = instantiator.instantiate(args);
+ * }</pre>
  */
 @FunctionalInterface
 public interface RecordInstantiator<T> {
     /**
-     * Crea una nueva instancia del Record usando el array de argumentos.
-     * La implementación generada realizará los casteos y unboxing necesarios
-     * antes de llamar al constructor canónico.
+     * Crea una nueva instancia del Record.
+     * @param args Argumentos para el constructor canónico.
+     * @return Nueva instancia del Record.
      */
     T instantiate(Object[] args);
 }

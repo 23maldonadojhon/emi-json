@@ -8,8 +8,15 @@ import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
 
 /**
- * Generador de bytecode para serialización ultra-rápida.
- * Genera una implementación de RecordSerializer que llama directamente a los accessors del Record.
+ * Generador de bytecode dinámico para la serialización de alto rendimiento.
+ * Genera implementaciones de {@link RecordSerializer} que llaman directamente
+ * a los accessors del Record sin usar reflexión.
+ * 
+ * <p>Ejemplo de uso interno:</p>
+ * <pre>{@code
+ * RecordSerializer ser = SerializerGenerator.generateSerializer(User.class, false);
+ * ser.serialize(sb, userInstance);
+ * }</pre>
  */
 public final class SerializerGenerator {
 

@@ -9,8 +9,15 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Generador de bytecode dinámico usando la Class-File API (Java 25).
- * Genera implementaciones de RecordInstantiator optimizadas para cada tipo de Record.
+ * Generador de bytecode dinámico utilizando la Class-File API (Java 25).
+ * Genera implementaciones de {@link RecordInstantiator} optimizadas para cada Record,
+ * eliminando el overhead de reflexión al instanciar objetos.
+ * 
+ * <p>Ejemplo de uso interno:</p>
+ * <pre>{@code
+ * RecordInstantiator<User> inst = ParserGenerator.generateInstantiator(User.class);
+ * User u = inst.instantiate(args);
+ * }</pre>
  */
 public final class ParserGenerator {
 
