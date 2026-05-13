@@ -399,7 +399,7 @@ final class JsonParser<T> {
     }
 
     /**
-     * Procesa secuencias de escape en strings JSON (incluyendo Unicode \uXXXX).
+     * Procesa secuencias de escape en strings JSON (incluyendo Unicode \\uXXXX).
      * Ejemplo: "hola\\n" -> "hola\n"
      *
      * @param s String con posibles escapes.
