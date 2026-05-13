@@ -1,6 +1,16 @@
-# EmiJson — High Performance JSON Parser
+# EmiJson 🚀
 
-EmiJson es un parser y serializer JSON de ultra alto rendimiento para Java, diseñado para aprovechar las últimas características de la JVM y eliminar por completo el uso de *Reflection* clásico durante el procesamiento de datos.
+**EmiJson** es un parser de JSON ultrarrápido diseñado para **Java Records**, optimizado para latencias de sub-microsegundo mediante el uso de la **Class-File API**, **Vector API (SIMD)** y **Off-heap Memory**.
+
+## 📑 Documentación
+- 🏗️ [**Arquitectura**](./ARCHITECTURE.md): Descubre cómo logramos procesar JSON en menos de 1000ns.
+- 📖 [**Guía de Usuario**](./USER_GUIDE.md): Cómo instalar y usar EmiJson en tu proyecto.
+
+## ⚡ Rendimiento
+EmiJson está diseñado para aplicaciones donde cada nanosegundo cuenta:
+- **Parseo:** ~880 ns/op
+- **Zero-Allocation:** Minimiza las pausas del GC.
+- **Bytecode Nativo:** Sin overhead de reflexión.
 
 ## 🚀 Requisitos del Sistema
 
