@@ -35,10 +35,25 @@ final class JsonParser<T> {
         this.strict = strict;
     }
 
+    /**
+     * Punto de entrada principal para parsear un JSON desde un String.
+     * Convierte el String a un {@link MemorySegment} para procesamiento de alto rendimiento.
+     *
+     * @param json El contenido JSON en formato String. Ejemplo: "{\"name\":\"Emi\"}"
+     * @return Una instancia del Record T poblada con los datos del JSON.
+     */
     T parse(String json) {
         return parse(MemorySegment.ofArray(json.getBytes(StandardCharsets.UTF_8)));
     }
 
+    /**
+     * Motor de parseo principal que navega por el segmento de memoria.
+     * Utiliza un bucle de alta velocidad y búsqueda O(1) de llaves para reconstruir el Record.
+     *
+     * @param segment El segmento de memoria (off-heap o array) que contiene los bytes del JSON.
+     * @return El Record instanciado.
+     * @throws JsonParseException Si el JSON tiene errores de sintaxis.
+     */
     T parse(MemorySegment segment) {
         long size = segment.byteSize();
         Object[] args = meta.initArgs();
@@ -61,48 +76,14 @@ final class JsonParser<T> {
                 pos = VectorScanner.skipWhitespace(segment, pos + 1);
 
                 byte firstByte = segment.get(ValueLayout.JAVA_BYTE, pos);
-                if (firstByte == '"') {
-                    long valStart = ++pos;
-                    pos = findStringEnd(segment, pos, size);
-                    if (idx >= 0) {
-                        TypeKind kind = meta.componentTypeKinds[idx];
-                        String s = extractStringEscaped(segment, valStart, pos);
-                        args[idx] = (kind == TypeKind.STRING) ? s : convertType(s, meta.components.get(idx).getType());
-                        seen |= (1L << idx);
-                    }
-                } else if (firstByte == '{') {
-                    long objEnd = findObjectEnd(segment, pos, size);
-                    if (idx >= 0 && meta.componentTypeKinds[idx] == TypeKind.RECORD) {
-                        args[idx] = parseNestedRecord(extractString(segment, pos, objEnd + 1), meta.components.get(idx).getType());
-                        seen |= (1L << idx);
-                    }
-                    pos = objEnd;
-                } else if (firstByte == '[') {
-                    long arrEnd = findArrayEnd(segment, pos, size);
-                    if (idx >= 0) {
-                        String raw = extractString(segment, pos, arrEnd + 1);
-                        Class<?> fieldType = meta.components.get(idx).getType();
-                        Type itemType = fieldType.isArray() ? fieldType.getComponentType() : meta.genericTypes[idx];
-                        List<Object> list = parseArrayValue(raw, itemType);
-                        args[idx] = (fieldType.isArray()) ? toNativeArray(list, fieldType.getComponentType()) : list;
-                        seen |= (1L << idx);
-                    }
-                    pos = arrEnd;
-                } else {
-                    long valStart = pos;
-                    while (pos < size && !isJsonDelimiter(segment.get(ValueLayout.JAVA_BYTE, pos))) pos++;
-                    if (idx >= 0) {
-                        TypeKind kind = meta.componentTypeKinds[idx];
-                        args[idx] = switch (kind) {
-                            case INT     -> parseDirectInt(segment, valStart, pos);
-                            case LONG    -> parseDirectLong(segment, valStart, pos);
-                            case BOOLEAN -> segment.get(ValueLayout.JAVA_BYTE, valStart) == 't';
-                            default      -> parsePrimitiveDirect(segment, valStart, pos, meta.components.get(idx).getType());
-                        };
-                        seen |= (1L << idx);
-                    }
-                    pos--;
-                }
+                pos = switch (firstByte) {
+                    case '"' -> handleStringField(segment, pos, size, idx, args);
+                    case '{' -> handleObjectField(segment, pos, size, idx, args);
+                    case '[' -> handleArrayField(segment, pos, size, idx, args);
+                    default  -> handlePrimitiveField(segment, pos, size, idx, args);
+                };
+
+                if (idx >= 0) seen |= (1L << idx);
                 pos++;
             }
         } catch (EmiJsonException e) {
@@ -115,6 +96,105 @@ final class JsonParser<T> {
         return meta.instantiator.instantiate(args);
     }
 
+    /**
+     * Maneja el parseo de campos cuyo valor es un String.
+     * Ejemplo: "nombre": "Emi"
+     *
+     * @param segment Segmento de memoria.
+     * @param pos Posición actual donde comienza el valor (después de ':').
+     * @param size Tamaño total del segmento.
+     * @param idx Índice del componente en el Record (-1 si es una llave desconocida).
+     * @param args Arreglo de argumentos para el constructor del Record.
+     * @return La nueva posición en el segmento después de procesar el String.
+     */
+    private long handleStringField(MemorySegment segment, long pos, long size, int idx, Object[] args) {
+        long valStart = ++pos;
+        pos = findStringEnd(segment, pos, size);
+        if (idx >= 0) {
+            TypeKind kind = meta.componentTypeKinds[idx];
+            String s = extractStringEscaped(segment, valStart, pos);
+            args[idx] = (kind == TypeKind.STRING) ? s : convertType(s, meta.components.get(idx).getType());
+        }
+        return pos;
+    }
+
+    /**
+     * Maneja el parseo de objetos JSON anidados que mapean a otros Records.
+     * Ejemplo: "direccion": {"calle": "Principal"}
+     *
+     * @param segment Segmento de memoria.
+     * @param pos Posición donde comienza el '{'.
+     * @param size Tamaño total del segmento.
+     * @param idx Índice del componente.
+     * @param args Arreglo de argumentos.
+     * @return La nueva posición después del '}'.
+     */
+    private long handleObjectField(MemorySegment segment, long pos, long size, int idx, Object[] args) {
+        long objEnd = findObjectEnd(segment, pos, size);
+        if (idx >= 0 && meta.componentTypeKinds[idx] == TypeKind.RECORD) {
+            args[idx] = parseNestedRecord(extractString(segment, pos, objEnd + 1), meta.components.get(idx).getType());
+        }
+        return objEnd;
+    }
+
+    /**
+     * Maneja el parseo de arreglos JSON ([...]) y los convierte a List o arreglos nativos.
+     * Ejemplo: "tags": ["java", "json"]
+     *
+     * @param segment Segmento de memoria.
+     * @param pos Posición donde comienza el '['.
+     * @param size Tamaño total del segmento.
+     * @param idx Índice del componente.
+     * @param args Arreglo de argumentos.
+     * @return La nueva posición después del ']'.
+     */
+    private long handleArrayField(MemorySegment segment, long pos, long size, int idx, Object[] args) {
+        long arrEnd = findArrayEnd(segment, pos, size);
+        if (idx >= 0) {
+            String raw = extractString(segment, pos, arrEnd + 1);
+            Class<?> fieldType = meta.components.get(idx).getType();
+            Type itemType = fieldType.isArray() ? fieldType.getComponentType() : meta.genericTypes[idx];
+            List<Object> list = parseArrayValue(raw, itemType);
+            args[idx] = (fieldType.isArray()) ? toNativeArray(list, fieldType.getComponentType()) : list;
+        }
+        return arrEnd;
+    }
+
+    /**
+     * Maneja el parseo de tipos primitivos (números, booleanos, null).
+     * Ejemplo: "id": 100, "activo": true
+     *
+     * @param segment Segmento de memoria.
+     * @param pos Posición actual donde comienza el valor literal.
+     * @param size Tamaño total del segmento.
+     * @param idx Índice del componente.
+     * @param args Arreglo de argumentos.
+     * @return La nueva posición (ajustada para el loop principal).
+     */
+    private long handlePrimitiveField(MemorySegment segment, long pos, long size, int idx, Object[] args) {
+        long valStart = pos;
+        while (pos < size && !isJsonDelimiter(segment.get(ValueLayout.JAVA_BYTE, pos))) pos++;
+        if (idx >= 0) {
+            TypeKind kind = meta.componentTypeKinds[idx];
+            args[idx] = switch (kind) {
+                case INT     -> parseDirectInt(segment, valStart, pos);
+                case LONG    -> parseDirectLong(segment, valStart, pos);
+                case BOOLEAN -> segment.get(ValueLayout.JAVA_BYTE, valStart) == 't';
+                default      -> parsePrimitiveDirect(segment, valStart, pos, meta.components.get(idx).getType());
+            };
+        }
+        return pos - 1; // Ajuste para el pos++ del loop principal
+    }
+
+    /**
+     * Busca el índice del componente en la tabla de búsqueda perfecta (O(1)).
+     * Compara los bytes de la llave extraída con los nombres de componentes conocidos.
+     *
+     * @param segment Segmento de memoria.
+     * @param start Inicio del nombre de la llave.
+     * @param end Fin del nombre de la llave.
+     * @return Índice del componente o -1 si no se encuentra.
+     */
     private int findComponentIndex(MemorySegment segment, long start, long end) {
         long len = end - start;
         int h = RecordMetadata.hash(segment, start, len);
@@ -153,6 +233,15 @@ final class JsonParser<T> {
         return convertType(extractString(segment, start, end), type);
     }
 
+    /**
+     * Parseador optimizado de enteros directamente desde el segmento de memoria sin crear Strings.
+     * Soporta notación científica como fallback.
+     *
+     * @param segment Segmento de memoria.
+     * @param start Inicio del número.
+     * @param end Fin del número.
+     * @return El entero parseado.
+     */
     private int parseDirectInt(MemorySegment segment, long start, long end) {
         int res = 0;
         boolean neg = segment.get(ValueLayout.JAVA_BYTE, start) == '-';
@@ -164,6 +253,14 @@ final class JsonParser<T> {
         return neg ? -res : res;
     }
 
+    /**
+     * Parseador optimizado de Longs directamente desde el segmento de memoria.
+     *
+     * @param segment Segmento de memoria.
+     * @param start Inicio del número.
+     * @param end Fin del número.
+     * @return El long parseado.
+     */
     private long parseDirectLong(MemorySegment segment, long start, long end) {
         long res = 0;
         boolean neg = segment.get(ValueLayout.JAVA_BYTE, start) == '-';
@@ -214,6 +311,14 @@ final class JsonParser<T> {
         return size;
     }
 
+    /**
+     * Convierte una representación en String a un tipo de Java específico.
+     * Maneja tipos comunes como Integer, Long, Double, BigDecimal y Java Time.
+     *
+     * @param val El valor en formato String. Ejemplo: "123.45"
+     * @param type La clase destino. Ejemplo: BigDecimal.class
+     * @return El objeto convertido.
+     */
     private Object convertType(String val, Class<?> type) {
         if (val == null || val.equals("null")) return null;
         if (type == String.class) return val;
@@ -264,6 +369,14 @@ final class JsonParser<T> {
         return list;
     }
 
+    /**
+     * Convierte una lista genérica a un arreglo nativo de Java (ej: int[]).
+     * Maneja el desempaquetado de tipos primitivos para evitar overhead de boxing.
+     *
+     * @param list Lista de objetos.
+     * @param componentType Tipo del componente del arreglo. Ejemplo: int.class
+     * @return El arreglo nativo poblado.
+     */
     private Object toNativeArray(List<Object> list, Class<?> componentType) {
         Object arr = Array.newInstance(componentType, list.size());
         for (int i = 0; i < list.size(); i++) {
@@ -285,6 +398,13 @@ final class JsonParser<T> {
         return arr;
     }
 
+    /**
+     * Procesa secuencias de escape en strings JSON (incluyendo Unicode \uXXXX).
+     * Ejemplo: "hola\\n" -> "hola\n"
+     *
+     * @param s String con posibles escapes.
+     * @return String procesado.
+     */
     private String unescape(String s) {
         if (s.indexOf('\\') == -1) return s;
         StringBuilder sb = new StringBuilder(s.length());
