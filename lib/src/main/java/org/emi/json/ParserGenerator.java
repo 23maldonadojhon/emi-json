@@ -24,7 +24,19 @@ public final class ParserGenerator {
     private ParserGenerator() {}
 
     /**
-     * Genera un instanciador optimizado para el Record especificado.
+     * Genera una implementación de {@link RecordInstantiator} en tiempo de ejecución.
+     * La clase generada es una "Hidden Class" que reside en el mismo paquete que el Record
+     * y tiene acceso privilegiado a su constructor canónico.
+     * 
+     * @param <T> El tipo del Record.
+     * @param recordClass Clase del Record a instanciar.
+     * @return Una instancia de la clase generada lista para crear Records.
+     * 
+     * <p>Ejemplo:</p>
+     * <pre>{@code
+     * RecordInstantiator<User> inst = ParserGenerator.generateInstantiator(User.class);
+     * User u = inst.instantiate(new Object[] { 1, "Emi", true });
+     * }</pre>
      */
     @SuppressWarnings("unchecked")
     public static <T> RecordInstantiator<T> generateInstantiator(Class<T> recordClass) {

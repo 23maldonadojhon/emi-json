@@ -151,15 +151,26 @@ final class RecordMetadata<T> {
         return TypeKind.OTHER;
     }
 
+    /**
+     * Inicializa un nuevo arreglo de argumentos para el constructor del Record.
+     * Copia los valores por defecto (ej: 0 para int, null para String) desde una plantilla.
+     * 
+     * @return Un nuevo arreglo {@code Object[]} listo para ser llenado por el parser.
+     */
     Object[] initArgs() {
         int n = argsTemplate.length;
         Object[] args = new Object[n];
-        for (int i = 0; i < n; i++) {
-            args[i] = argsTemplate[i];
-        }
+        System.arraycopy(argsTemplate, 0, args, 0, n);
         return args;
     }
 
+    /**
+     * Valida que todos los campos requeridos hayan sido encontrados en el JSON.
+     * Utiliza una máscara de bits para realizar la verificación de forma eficiente.
+     * 
+     * @param seen Máscara de bits donde cada bit representa un campo encontrado.
+     * @throws JsonMappingException Si falta algún campo y el modo estricto está activo.
+     */
     void validateAllPresent(long seen) {
         for (int i = 0; i < components.size() && i < 64; i++) {
             if ((seen & (1L << i)) == 0)
@@ -167,6 +178,16 @@ final class RecordMetadata<T> {
         }
     }
 
+    /**
+     * Función de hash ultrarrápida diseñada para nombres de campos JSON cortos.
+     * Utiliza el primer carácter, el último y la longitud para minimizar colisiones
+     * en la tabla de búsqueda perfecta.
+     * 
+     * @param bytes Arreglo de bytes (UTF-8).
+     * @param offset Inicio del nombre.
+     * @param len Longitud del nombre.
+     * @return El valor de hash calculado.
+     */
     static int hash(byte[] bytes, int offset, int len) {
         if (len == 0) return 0;
         int h = len;

@@ -50,9 +50,16 @@ final class JsonSerializer<T> {
     }
 
     /**
-     * Serializa {@code record} a un String JSON.
-     * Usa la capacidad inicial pre-calculada de RecordMetadata para evitar
-     * el primer resize del StringBuilder en la mayoría de los casos.
+     * Serializa una instancia de Record a un String JSON.
+     * Utiliza un StringBuilder poolerizado para minimizar las asignaciones de memoria.
+     * 
+     * @param record La instancia del Record a serializar.
+     * @return El JSON resultante como String.
+     * 
+     * <p>Ejemplo:</p>
+     * <pre>{@code
+     * String json = serializer.toJson(new User("Emi", 25)); // {"name":"Emi","age":25}
+     * }</pre>
      */
     String toJson(T record) {
         StringBuilder sb = SB_POOL.get();
@@ -63,11 +70,18 @@ final class JsonSerializer<T> {
 
 
     /**
-     * Serializa {@code record} directamente a {@code byte[]} UTF-8 sin crear un
-     * String intermedio. Útil cuando el destino es un socket o buffer de red.
-     * {@code CharsetEncoder.encode(CharBuffer)} opera sobre el CharBuffer del
-     * StringBuilder sin copiar a String, reduciendo una allocation respecto a
-     * {@code toJson(record).getBytes(UTF_8)}.
+     * Serializa un Record directamente a un arreglo de bytes (UTF-8).
+     * Esta versión es más eficiente que toJson().getBytes() ya que intenta
+     * evitar copias intermedias de strings.
+     * 
+     * @param record La instancia a serializar.
+     * @return El JSON en bytes UTF-8.
+     * 
+     * <p>Ejemplo:</p>
+     * <pre>{@code
+     * byte[] data = serializer.toBytes(user);
+     * outputStream.write(data);
+     * }</pre>
      */
     byte[] toBytes(T record) {
         StringBuilder sb = SB_POOL.get();
@@ -75,7 +89,6 @@ final class JsonSerializer<T> {
         build(sb, record);
         
         // Optimización: Usamos Charset.encode directamente sobre el CharBuffer del StringBuilder.
-        // Aunque aún hay un ByteBuffer temporal interno en encode(), evitamos el String intermedio.
         ByteBuffer buf = StandardCharsets.UTF_8.encode(CharBuffer.wrap(sb));
         byte[] result = new byte[buf.remaining()];
         buf.get(result);
@@ -93,11 +106,17 @@ final class JsonSerializer<T> {
 
 
     /**
-     * Escribe el valor JSON correcto según el tipo:
-     * - String recibe comillas envolventes.
-     * - Boolean y números se escriben tal cual (toString implícito de StringBuilder).
-     * - null se escribe literalmente como "null".
-     * El patrón switch sobre el tipo en runtime es más legible y seguro que instanceof encadenado.
+     * Escribe el valor JSON correcto según el tipo de dato en tiempo de ejecución.
+     * Soporta Strings, Booleanos, Números, Listas, Enums y otros Records (recursivo).
+     * 
+     * @param sb Destino de la serialización.
+     * @param value El objeto a serializar.
+     * 
+     * <p>Ejemplo:</p>
+     * <pre>{@code
+     * JsonSerializer.staticAppendValue(sb, "Hola"); // Escribe "Hola"
+     * JsonSerializer.staticAppendValue(sb, 123);    // Escribe 123
+     * }</pre>
      */
     public static void staticAppendValue(StringBuilder sb, Object value) {
         switch (value) {

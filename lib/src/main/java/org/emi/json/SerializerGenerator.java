@@ -22,6 +22,20 @@ public final class SerializerGenerator {
 
     private SerializerGenerator() {}
 
+    /**
+     * Genera una implementación de {@link RecordSerializer} optimizada para el Record dado.
+     * Crea una "Hidden Class" que invoca directamente a los métodos de acceso del Record.
+     * 
+     * @param recordClass La clase del Record a serializar.
+     * @param prettyPrint Indica si se debe generar código con saltos de línea e indentación.
+     * @return Una instancia del serializador generado por bytecode.
+     * 
+     * <p>Ejemplo de uso interno:</p>
+     * <pre>{@code
+     * RecordSerializer ser = SerializerGenerator.generateSerializer(User.class, true);
+     * ser.serialize(sb, userInstance);
+     * }</pre>
+     */
     public static RecordSerializer generateSerializer(Class<?> recordClass, boolean prettyPrint) {
         ClassFile cf = ClassFile.of();
         ClassDesc recordDesc = ClassDesc.of(recordClass.getName());

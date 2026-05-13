@@ -24,6 +24,19 @@ final class VectorScanner {
     private static final ByteVector V_COMMA = ByteVector.broadcast(SPECIES, (byte) ',');
     private static final ByteVector V_SPACE = ByteVector.broadcast(SPECIES, (byte) ' ');
 
+    /**
+     * Salta todos los caracteres de espacio en blanco (ASCII <= 32) de forma acelerada.
+     * Utiliza SIMD para comparar múltiples bytes a la vez y encontrar el primer carácter no-espacio.
+     * 
+     * @param segment Segmento de memoria a escanear.
+     * @param offset Posición inicial.
+     * @return La posición del primer carácter que NO es un espacio en blanco.
+     * 
+     * <p>Ejemplo:</p>
+     * <pre>{@code
+     * long contentStart = VectorScanner.skipWhitespace(segment, 0); // "   {..." -> 3
+     * }</pre>
+     */
     static long skipWhitespace(MemorySegment segment, long offset) {
         long i = offset;
         long size = segment.byteSize();
@@ -38,6 +51,20 @@ final class VectorScanner {
         return i;
     }
 
+    /**
+     * Busca la siguiente ocurrencia de un carácter delimitador específico usando SIMD.
+     * Utiliza vectores pre-calculados para evitar la latencia de broadcast en el hot path.
+     * 
+     * @param segment Segmento de memoria.
+     * @param offset Posición inicial de búsqueda.
+     * @param target Carácter a buscar (ej: '"', ':', ',').
+     * @return La posición del delimitador o -1 si no se encuentra.
+     * 
+     * <p>Ejemplo:</p>
+     * <pre>{@code
+     * long keyEnd = VectorScanner.findDelimiter(segment, keyStart, (byte)'"');
+     * }</pre>
+     */
     static long findDelimiter(MemorySegment segment, long offset, byte target) {
         // Selección de vector pre-calculado para evitar broadcast en el loop.
         ByteVector vTarget = switch (target) {
